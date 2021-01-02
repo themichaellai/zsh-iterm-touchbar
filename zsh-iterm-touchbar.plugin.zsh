@@ -120,7 +120,11 @@ function _displayNpmScripts() {
   # find available npm run scripts only if new directory
   if [[ $lastPackageJsonPath != $(find-up package.json) ]]; then
     lastPackageJsonPath=$(find-up package.json)
-    npmScripts=($(node -e "console.log(Object.keys($(npm run --json)).sort((a, b) => a.localeCompare(b)).filter((name, idx) => idx < 19).join(' '))"))
+    if [[ -e "$lastPackageJsonPath/package.json" ]]; then
+      npmScripts=($(jq -j '.scripts | keys[] | "\(.) "' "$lastPackageJsonPath/package.json"))
+    else
+      npmScripts=()
+    fi
   fi
 
   _clearTouchbar
@@ -223,7 +227,7 @@ function _displayBranches() {
 #}
 
 #zle -N _displayDefault
-#zle -N _displayNpmScripts
+zle -N _displayNpmScripts
 zle -N _displayMakeTargets
 #zle -N _displayYarnScripts
 #zle -N _displayBranches
@@ -232,13 +236,8 @@ zle -N _displayMakeTargets
 precmd_iterm_touchbar() {
   if [[ -e "$PWD/Makefile" ]]; then
     _displayMakeTargets
-  # TODO: Figure out why this is slow. Likely slow because it uses node, which
-  # I've made to lazily load.
-  #elif [[ $(find-up package.json) != "" ]]; then
-  #  _displayNpmScripts
   else
-    _clearTouchbar
-    _unbindTouchbar
+    _displayNpmScripts
   fi
   #if [[ $touchBarState == 'npm' ]]; then
   #  _displayNpmScripts
