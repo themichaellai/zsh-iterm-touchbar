@@ -7,7 +7,7 @@ GIT_UNPULLED="${GIT_UNPULLED:-⇣}"
 GIT_UNPUSHED="${GIT_UNPUSHED:-⇡}"
 
 # YARN
-YARN_ENABLED=true
+YARN_ENABLED=false
 TOUCHBAR_GIT_ENABLED=true
 
 # https://unix.stackexchange.com/a/22215
@@ -17,71 +17,6 @@ find-up () {
     path=${path%/*}
   done
   echo "$path"
-}
-
-# Output name of current branch.
-git_current_branch() {
-  local ref
-  ref=$(command git symbolic-ref --quiet HEAD 2> /dev/null)
-  local ret=$?
-  if [[ $ret != 0 ]]; then
-    [[ $ret == 128 ]] && return  # no git repo.
-    ref=$(command git rev-parse --short HEAD 2> /dev/null) || return
-  fi
-  echo ${ref#refs/heads/}
-}
-
-# Uncommitted changes.
-# Check for uncommitted changes in the index.
-git_uncomitted() {
-  if ! $(git diff --quiet --ignore-submodules --cached); then
-    echo -n "${GIT_UNCOMMITTED}"
-  fi
-}
-
-# Unstaged changes.
-# Check for unstaged changes.
-git_unstaged() {
-  if ! $(git diff-files --quiet --ignore-submodules --); then
-    echo -n "${GIT_UNSTAGED}"
-  fi
-}
-
-# Untracked files.
-# Check for untracked files.
-git_untracked() {
-  if [ -n "$(git ls-files --others --exclude-standard)" ]; then
-    echo -n "${GIT_UNTRACKED}"
-  fi
-}
-
-# Stashed changes.
-# Check for stashed changes.
-git_stashed() {
-  if $(git rev-parse --verify refs/stash &>/dev/null); then
-    echo -n "${GIT_STASHED}"
-  fi
-}
-
-# Unpushed and unpulled commits.
-# Get unpushed and unpulled commits from remote and draw arrows.
-git_unpushed_unpulled() {
-  # check if there is an upstream configured for this branch
-  command git rev-parse --abbrev-ref @'{u}' &>/dev/null || return
-
-  local count
-  count="$(command git rev-list --left-right --count HEAD...@'{u}' 2>/dev/null)"
-  # exit if the command failed
-  (( !$? )) || return
-
-  # counters are tab-separated, split on tab and store as array
-  count=(${(ps:\t:)count})
-  local arrows left=${count[1]} right=${count[2]}
-
-  (( ${right:-0} > 0 )) && arrows+="${GIT_UNPULLED}"
-  (( ${left:-0} > 0 )) && arrows+="${GIT_UNPUSHED}"
-
-  [ -n $arrows ] && echo -n "${arrows}"
 }
 
 pecho() {
@@ -99,6 +34,7 @@ touchBarState=''
 npmScripts=()
 gitBranches=()
 lastPackageJsonPath=''
+lastMakefilePath=''
 
 function _clearTouchbar() {
   pecho "\033]1337;PopKeyLabels\a"
@@ -155,27 +91,28 @@ function _displayDefault() {
 
     [ -n "${indicators}" ] && touchbarIndicators="🔥[${indicators}]" || touchbarIndicators="🙌";
 
-    setKey 2 "🎋 `git_current_branch`" _displayBranches '-q'
-    setKey 3 $touchbarIndicators "git status"
-    setKey 4 "🔼 push" "git push origin $(git_current_branch)"
-    setKey 5 "🔽 pull" "git pull origin $(git_current_branch)"
+    #setKey 2 "🎋 `git_current_branch`" _displayBranches '-q'
+    #setKey 3 $touchbarIndicators "git status"
+    #setKey 4 "🔼 push" "git push origin $(git_current_branch)"
+    #setKey 5 "🔽 pull" "git pull origin $(git_current_branch)"
   else
-    clearKey 2
-    clearKey 3
-    clearKey 4
-    clearKey 5
+    true
+    #clearKey 2
+    #clearKey 3
+    #clearKey 4
+    #clearKey 5
   fi
 
   # PACKAGE.JSON
   # ------------
   if [[ $(find-up package.json) != "" ]]; then
       if [[ $(find-up yarn.lock) != "" ]] && [[ "$YARN_ENABLED" = true ]]; then
-          setKey 6 "🐱 yarn-run" _displayYarnScripts '-q'
+          setKey 2 "🐱 yarn-run" _displayYarnScripts '-q'
       else
-          setKey 6 "⚡️ npm-run" _displayNpmScripts '-q'
+          setKey 2 "⚡️ npm-run" _displayNpmScripts '-q'
     fi
   else
-      clearKey 6
+      clearKey 3
   fi
 }
 
@@ -191,13 +128,42 @@ function _displayNpmScripts() {
 
   touchBarState='npm'
 
-  fnKeysIndex=1
+  fnKeysIndex=0
   for npmScript in "$npmScripts[@]"; do
     fnKeysIndex=$((fnKeysIndex + 1))
     setKey $fnKeysIndex $npmScript "npm run $npmScript"
   done
 
-  setKey 1 "👈 back" _displayDefault '-q'
+  #setKey 1 "👈 back" _displayDefault '-q'
+}
+
+function _displayMakeTargets() {
+  # find available make targets only if new directory
+  if [[ $lastMakefilePath != "$PWD" ]]; then
+    lastMakefilePath=$PWD
+    # Adapted from:
+    # https://unix.stackexchange.com/questions/230047/how-to-list-all-targets-in-make/230050#230050
+    # Unsure why "Makefile" is included in here... but it is excluded in the
+    # below awk script.
+    if [[ -e "$PWD/Makefile" ]]; then
+      makeTargets=($(make -qp | awk -F':' '/^[a-zA-Z0-9][^$#\/\t=]*:([^=]|$)/ {split($1,A,/ /);for(i in A) { if (A[i] != "Makefile") printf "%s ", A[i] } }'))
+    else
+      makeTargets=()
+    fi
+  fi
+
+  _clearTouchbar
+  _unbindTouchbar
+
+  touchBarState='make'
+
+  if [[ ${#makeTargets[@]} -gt 0 ]]; then
+    fnKeysIndex=0
+    for target in "$makeTargets[@]"; do
+      fnKeysIndex=$((fnKeysIndex + 1))
+      setKey $fnKeysIndex $target "make $target"
+    done
+  fi
 }
 
 function _displayYarnScripts() {
@@ -241,39 +207,50 @@ function _displayBranches() {
   setKey 1 "👈 back" _displayDefault '-q'
 }
 
-function _displayPath() {
-  _clearTouchbar
-  _unbindTouchbar
-  touchBarState='path'
+#function _displayPath() {
+#  _clearTouchbar
+#  _unbindTouchbar
+#  touchBarState='path'
+#
+#  IFS="/" read -rA directories <<< "$PWD"
+#  fnKeysIndex=2
+#  for dir in "${directories[@]:1}"; do
+#    setKey $fnKeysIndex "$dir" "cd $(pwd | cut -d'/' -f-$fnKeysIndex)"
+#    fnKeysIndex=$((fnKeysIndex + 1))
+#  done
+#
+#  setKey 1 "👈 back" _displayDefault '-q'
+#}
 
-  IFS="/" read -rA directories <<< "$PWD"
-  fnKeysIndex=2
-  for dir in "${directories[@]:1}"; do
-    setKey $fnKeysIndex "$dir" "cd $(pwd | cut -d'/' -f-$fnKeysIndex)"
-    fnKeysIndex=$((fnKeysIndex + 1))
-  done
-
-  setKey 1 "👈 back" _displayDefault '-q'
-}
-
-zle -N _displayDefault
-zle -N _displayNpmScripts
-zle -N _displayYarnScripts
-zle -N _displayBranches
-zle -N _displayPath
+#zle -N _displayDefault
+#zle -N _displayNpmScripts
+zle -N _displayMakeTargets
+#zle -N _displayYarnScripts
+#zle -N _displayBranches
+#zle -N _displayPath
 
 precmd_iterm_touchbar() {
-  if [[ $touchBarState == 'npm' ]]; then
-    _displayNpmScripts
-  elif [[ $touchBarState == 'yarn' ]]; then
-    _displayYarnScripts
-  elif [[ $touchBarState == 'github' ]]; then
-    _displayBranches
-  elif [[ $touchBarState == 'path' ]]; then
-    _displayPath
+  if [[ -e "$PWD/Makefile" ]]; then
+    _displayMakeTargets
+  # TODO: Figure out why this is slow. Likely slow because it uses node, which
+  # I've made to lazily load.
+  #elif [[ $(find-up package.json) != "" ]]; then
+  #  _displayNpmScripts
   else
-    _displayDefault
+    _clearTouchbar
+    _unbindTouchbar
   fi
+  #if [[ $touchBarState == 'npm' ]]; then
+  #  _displayNpmScripts
+  #elif [[ $touchBarState == 'yarn' ]]; then
+  #  _displayYarnScripts
+  #elif [[ $touchBarState == 'github' ]]; then
+  #  _displayBranches
+  #elif [[ $touchBarState == 'path' ]]; then
+  #  _displayPath
+  #else
+  #  _displayDefault
+  #fi
 }
 
 autoload -Uz add-zsh-hook
